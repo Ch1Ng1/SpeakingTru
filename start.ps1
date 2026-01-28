@@ -1,21 +1,18 @@
-# Скрипт за лесно стартиране на Гурко
+# Скрипт за лесно стартиране на KIKI
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "       ГУРКО - AI АСИСТЕНТ" -ForegroundColor Green
+Write-Host "       KIKI - AI АСИСТЕНТ" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Стартиране на Гурко Супер версия..." -ForegroundColor Yellow
+Write-Host "Стартиране на KIKI версия..." -ForegroundColor Yellow
 Write-Host ""
 
-# Проверка дали Ollama е стартиран
-try {
-    $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -Method Get -TimeoutSec 2 -ErrorAction Stop
-    Write-Host "✓ Ollama е стартиран" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Ollama НЕ е стартиран!" -ForegroundColor Red
-    Write-Host "Моля стартирайте Ollama с: ollama serve" -ForegroundColor Yellow
-    Write-Host ""
-    Read-Host "Натиснете Enter за да продължите или Ctrl+C за да спрете"
+# Проверка дали .venv съществува
+if (-not (Test-Path ".venv\Scripts\python.exe")) {
+    Write-Host "[ГРЕШКА] Virtual environment не е намерен!" -ForegroundColor Red
+    Write-Host "Моля стартирайте: python -m venv .venv" -ForegroundColor Yellow
+    Read-Host "Натиснете Enter"
+    exit 1
 }
 
 # Стартиране на програмата
-& "C:/xampp/htdocs/SpeakingTru/.venv/Scripts/python.exe" ai_friend_super.py
+& ".venv\Scripts\python.exe" ai_friend_super.py
