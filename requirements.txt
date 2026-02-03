@@ -8,3 +8,4 @@ wikipedia
 wolframalpha
 beautifulsoup4
 lxml
+yfinance

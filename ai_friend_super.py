@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 import random
 import re
 import logging
+import yfinance as yf
 
 # Конфигурация на логване
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,10 +29,22 @@ except Exception as e:
 WEATHER_API_KEY = ""  # OpenWeatherMap API key (безплатен на openweathermap.org)
 WOLFRAM_APP_ID = ""   # WolframAlpha App ID (безплатен на wolframalpha.com)
 
+# Конфигурационни константи
+ECHO_PREVENTION_DELAY = 3.5  # Секунди след говорене преди слушане
+DUPLICATE_QUESTION_TIMEOUT = 10  # Секунди за игнориране на дублиран въпрос
+POST_RESPONSE_DELAY = 4  # Секунди пауза след отговор
+MICROPHONE_ENERGY_THRESHOLD = 500  # Чувствителност на микрофона
+MAX_TEXT_LENGTH = 500  # Максимална дължина на текста за TTS
+MAX_CONVERSATION_HISTORY = 100  # Максимален брой въпроси в историята
+
 # История и памет
 conversation_history = []
 user_memory = {}  # Запазва важни неща за потребителя
 MEMORY_FILE = "user_memory.json"
+is_speaking = False  # Флаг дали KIKI говори в момента
+last_speak_time = 0  # Последно време на говорене
+last_question = ""  # Последен обработен въпрос
+last_question_time = 0  # Време на последния въпрос
 
 # Конфигурация на Wikipedia за български
 wikipedia.set_lang("bg")
@@ -59,18 +72,43 @@ def save_memory():
 
 def speak(text):
     """Изговаря текст на глас с Google TTS"""
+    global is_speaking, last_speak_time
+    
     if not text:
         return
+    
+    # Изчакваме ако все още говорим
+    timeout = 0
+    while is_speaking and timeout < 50:  # Максимум 5 секунди
+        time.sleep(0.1)
+        timeout += 1
+    
+    if is_speaking:
+        logger.warning("Пропускане на speak() - все още говорим")
+        return
+    
+    is_speaking = True
     
     # Почистваме текста от символи, които TTS не чете правилно
     text = re.sub(r'[<>«»*]', ', ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     
-    if len(text) > 500:
-        text = text[:500] + "..."
+    if len(text) > MAX_TEXT_LENGTH:
+        text = text[:MAX_TEXT_LENGTH] + "..."
     
     print(f"🤖 KIKI: {text}")
     try:
+        # Спираме и изчакваме всяко текущо възпроизвеждане
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.stop()
+            time.sleep(0.3)
+        
+        # Освобождаваме ресурсите
+        try:
+            pygame.mixer.music.unload()
+        except:
+            pass
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
             temp_file = fp.name
         
@@ -83,40 +121,88 @@ def speak(text):
         while pygame.mixer.music.get_busy():
             time.sleep(0.1)
         
+        # Допълнителна пауза след говорене
+        time.sleep(0.5)
+        
         pygame.mixer.music.unload()
-        os.unlink(temp_file)
+        
+        # Изчакваме малко преди да изтрием файла
+        time.sleep(0.2)
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
         
     except Exception as e:
         logger.error(f"Грешка при глас: {e}")
         print(f"❌ Грешка при глас: {e}")
+    finally:
+        is_speaking = False
+        last_speak_time = time.time()  # Записваме кога сме спрели да говорим
 
 def listen():
     """Слуша и разпознава реч"""
+    global is_speaking, last_speak_time
+    
+    # Не слушаме докато KIKI говори
+    if is_speaking:
+        time.sleep(0.2)
+        return ""
+    
+    # Изчакваме след като KIKI е спряла да говори
+    # За да не улавяме ехото от високоговорителите
+    time_since_speak = time.time() - last_speak_time
+    if time_since_speak < ECHO_PREVENTION_DELAY:
+        time.sleep(0.3)
+        return ""
+    
     recognizer = sr.Recognizer()
-    # Намаляваме energy_threshold за по-добра чувствителност
-    recognizer.energy_threshold = 300
+    # Увеличаваме energy_threshold за да не улавя ехо толкова лесно
+    recognizer.energy_threshold = MICROPHONE_ENERGY_THRESHOLD
     recognizer.dynamic_energy_threshold = False
     
     with sr.Microphone() as source:
-        print("🎧 Слушам... (имате до 30 секунди)")
+        # Не показваме съобщение ако говорим
+        if not is_speaking:
+            print("🎧 Слушам... (имате до 30 секунди)")
+        
         try:
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            # Проверка отново преди да започнем да слушаме
+            if is_speaking:
+                return ""
+            
+            recognizer.adjust_for_ambient_noise(source, duration=0.8)
             # Увеличаваме времената значително
             audio = recognizer.listen(source, timeout=30, phrase_time_limit=60)
+            
+            # Проверка дали не сме започнали да говорим междувременно
+            if is_speaking:
+                logger.debug("Игнориране на аудио - KIKI говори")
+                return ""
+            
             print("✓ Разпознавам...")
             text = recognizer.recognize_google(audio, language="bg-BG")
+            
+            # Финална проверка
+            if is_speaking:
+                logger.debug("Игнориране на разпознат текст - KIKI говори")
+                return ""
+            
             print(f"👤 Вие: {text}")
             return text.lower()
         except sr.WaitTimeoutError:
-            logger.warning("Микрофонът не улови нищо")
+            if not is_speaking:
+                logger.warning("Микрофонът не улови нищо")
             return ""
         except sr.UnknownValueError:
-            print("⚠ Не разбрах какво казахте")
-            logger.warning("Речта не е разпозната")
+            if not is_speaking:  # Не показваме грешка ако говорим
+                print("⚠ Не разбрах какво казахте")
+                logger.warning("Речта не е разпозната")
             return ""
         except Exception as e:
-            logger.error(f"Грешка при слушане: {e}")
-            print(f"❌ Грешка: {e}")
+            if not is_speaking:
+                logger.error(f"Грешка при слушане: {e}")
+                print(f"❌ Грешка: {e}")
             return ""
 
 def search_google(query):
@@ -254,9 +340,83 @@ def get_fun_fact():
     ]
     return random.choice(facts)
 
+def get_stock_price(symbol):
+    """Получава цена на акция в реално време"""
+    try:
+        # Добавяме .US за американски борси ако няма точка
+        if '.' not in symbol:
+            symbol = symbol.upper()
+        
+        stock = yf.Ticker(symbol)
+        
+        # Вземаме най-актуалната информация
+        info = stock.info
+        history = stock.history(period='1d')
+        
+        if history.empty:
+            return f"Не намерих данни за {symbol}."
+        
+        current_price = history['Close'].iloc[-1]
+        open_price = history['Open'].iloc[0]
+        high = history['High'].max()
+        low = history['Low'].min()
+        
+        # Изчисляваме промяна в проценти
+        change = current_price - open_price
+        change_percent = (change / open_price) * 100
+        
+        # Получаваме името на компанията
+        company_name = info.get('shortName', symbol)
+        
+        result = f"{company_name}: {current_price:.2f} долара"
+        
+        if change >= 0:
+            result += f", нагоре с {change_percent:.2f}%"
+        else:
+            result += f", надолу с {abs(change_percent):.2f}%"
+        
+        result += f". Най-висока: {high:.2f}, най-ниска: {low:.2f}."
+        
+        return result
+    except Exception as e:
+        logger.error(f"Грешка при борсови данни: {e}")
+        return f"Не мога да получа информация за {symbol}. Проверете дали символът е правилен."
+
+def get_crypto_price(crypto):
+    """Получава цена на криптовалута"""
+    try:
+        # Криптовалутите в yfinance имат -USD суфикс
+        crypto_upper = crypto.upper()
+        if not crypto_upper.endswith('-USD'):
+            crypto_upper = f"{crypto_upper}-USD"
+        
+        ticker = yf.Ticker(crypto_upper)
+        history = ticker.history(period='1d')
+        
+        if history.empty:
+            return f"Не намерих данни за {crypto}."
+        
+        current_price = history['Close'].iloc[-1]
+        open_price = history['Open'].iloc[0]
+        
+        change = current_price - open_price
+        change_percent = (change / open_price) * 100
+        
+        result = f"{crypto.upper()}: {current_price:.2f} долара"
+        
+        if change >= 0:
+            result += f", нагоре с {change_percent:.2f}%"
+        else:
+            result += f", надолу с {abs(change_percent):.2f}%"
+        
+        return result
+    except Exception as e:
+        logger.error(f"Грешка при криптовалутни данни: {e}")
+        return f"Не мога да получа информация за {crypto}."
+
 def process_command(text):
     """Обработва специални команди"""
-    if not text:
+    if not text or len(text) < 2:
         return None
     
     text = text.lower().strip()
@@ -295,6 +455,77 @@ def process_command(text):
     # Факти
     if any(word in text for word in ['факт', 'нещо интересно', 'интересен факт']):
         return get_fun_fact()
+    
+    # Злато и сребро
+    if any(word in text for word in ['злато', 'gold', 'сребро', 'silver', 'метал']):
+        precious_metals = {
+            'злато': 'GC=F', 'gold': 'GC=F', 'голд': 'GC=F',
+            'сребро': 'SI=F', 'silver': 'SI=F', 'силвър': 'SI=F',
+        }
+        
+        found_metal = None
+        for name, symbol in precious_metals.items():
+            if name in text:
+                found_metal = symbol
+                break
+        
+        if found_metal:
+            return get_stock_price(found_metal)
+        else:
+            return "Кажете ми кой благороден метал. Например: злато, сребро."
+    
+    # Борсови данни - акции
+    if any(word in text for word in ['акция', 'акции', 'stock', 'борса', 'цена на']):
+        # Популярни американски акции
+        stock_symbols = {
+            'apple': 'AAPL', 'епъл': 'AAPL', 'ейпъл': 'AAPL',
+            'google': 'GOOGL', 'гугъл': 'GOOGL',
+            'microsoft': 'MSFT', 'майкрософт': 'MSFT',
+            'tesla': 'TSLA', 'тесла': 'TSLA',
+            'amazon': 'AMZN', 'амазон': 'AMZN',
+            'meta': 'META', 'facebook': 'META', 'фейсбук': 'META',
+            'nvidia': 'NVDA', 'нвидия': 'NVDA',
+            'netflix': 'NFLX', 'нетфликс': 'NFLX',
+        }
+        
+        # Търсим за символ в текста
+        found_symbol = None
+        for name, symbol in stock_symbols.items():
+            if name in text:
+                found_symbol = symbol
+                break
+        
+        # Или проверяваме за директен символ (напр. "AAPL")
+        if not found_symbol:
+            symbol_match = re.search(r'\b([A-Z]{1,5})\b', text.upper())
+            if symbol_match:
+                found_symbol = symbol_match.group(1)
+        
+        if found_symbol:
+            return get_stock_price(found_symbol)
+        else:
+            return "Кажете ми символа или името на компанията. Например: Apple, Tesla, Microsoft."
+    
+    # Криптовалути
+    if any(word in text for word in ['биткойн', 'bitcoin', 'криптовалута', 'крипто', 'ethereum', 'етериум']):
+        crypto_names = {
+            'bitcoin': 'BTC', 'биткойн': 'BTC', 'биткоин': 'BTC',
+            'ethereum': 'ETH', 'етериум': 'ETH', 'етереум': 'ETH',
+            'dogecoin': 'DOGE', 'dogе': 'DOGE', 'доге': 'DOGE',
+            'cardano': 'ADA', 'кардано': 'ADA',
+            'ripple': 'XRP', 'рипъл': 'XRP',
+        }
+        
+        found_crypto = None
+        for name, symbol in crypto_names.items():
+            if name in text:
+                found_crypto = symbol
+                break
+        
+        if found_crypto:
+            return get_crypto_price(found_crypto)
+        else:
+            return "Кажете ми коя криптовалута. Например: Bitcoin, Ethereum, Dogecoin."
     
     # Wikipedia търсене
     if any(word in text for word in ['какво е', 'кой е', 'коя е', 'какви']):
@@ -354,7 +585,11 @@ def get_ai_response(user_message):
         return command_response
     
     # Добавяме в историята
-    if len(conversation_history) < 100:  # Ограничаваме размера на историята
+    if len(conversation_history) < MAX_CONVERSATION_HISTORY:
+        conversation_history.append(user_message)
+    else:
+        # Премахваме най-старата запис ако сме достигнали лимита
+        conversation_history.pop(0)
         conversation_history.append(user_message)
     
     # Прости диалогови отговори
@@ -412,7 +647,7 @@ def get_ai_response(user_message):
     
     # Помощ
     if any(word in text for word in ['помощ', 'какво можеш', 'способности', 'умееш']):
-        return "Мога да: изчислявам математически изрази, проверявам времето, търся в Wikipedia и Google, разказвам вицове, споделям интересни факти и запомням неща за теб!"
+        return "Мога да: изчислявам математически izraзи, проверявам времето, проверявам борсови цени (акции, злато, сребро) и криптовалути, търся в Wikipedia и Google, разказвам вицове, споделям интересни факти и запомням неща за теб!"
     
     # Име на потребителя
     if user_memory.get('name'):
@@ -441,6 +676,9 @@ def main():
     print("\n📋 Какво мога да правя:")
     print("   ✓ Изчисления (Колко е 15 * 7?)")
     print("   ✓ Времето (Какво е времето?)")
+    print("   ✓ Борсови данни (Каква е цената на Apple акция?)")
+    print("   ✓ Благородни метали (Колко струва златото?)")
+    print("   ✓ Криптовалути (Колко струва Bitcoin?)")
     print("   ✓ Wikipedia (Какво е изкуствен интелект?)")
     print("   ✓ Вицове (Разкажи вицове!)")
     print("   ✓ Интересни факти (Кажи ми факт)")
@@ -472,7 +710,14 @@ def main():
         return
     
     try:
+        global last_question, last_question_time
+        
         while True:
+            # Изчакваме ако KIKI говори
+            if is_speaking:
+                time.sleep(0.5)
+                continue
+            
             text = listen()
             
             if not text:
@@ -502,27 +747,47 @@ def main():
             question = re.sub(r'\s+', ' ', question).strip()
             question = question.rstrip(',').rstrip('.').strip()
             
-            if not question:
-                # Само казал "kiki" без въпрос
+            if not question or len(question) < 3:
+                # Само казал "kiki" без въпрос или твърде кратък въпрос
                 if not is_processing:
                     speak("Да, слушам те!")
+                    # Кратка пауза след отговора
+                    time.sleep(1)
+                continue
+            
+            # Проверка за дублиран въпрос
+            current_time = time.time()
+            if question == last_question and (current_time - last_question_time) < DUPLICATE_QUESTION_TIMEOUT:
+                logger.info(f"Игнориране на дублиран въпрос: {question}")
+                print("⚠ Този въпрос вече е обработен.")
+                time.sleep(1)
                 continue
             
             # Проверка дали вече обработва въпрос
             if is_processing:
                 print("⏳ Вече обработвам въпрос, моля изчакайте...")
-                speak("Моля изчакайте, обработвам предишния въпрос.")
                 continue
             
             is_processing = True
+            last_question = question
+            last_question_time = current_time
             print(f"📝 Обработвам: {question}")
             try:
                 response = get_ai_response(question)
                 if response:
-                    speak(response)
+                    # Допълнителна проверка преди да говорим
+                    if not is_speaking:
+                        speak(response)
+                        # Добавяме още пауза след отговора за пълно заглушаване на ехото
+                        print("⏸ Пауза за избягване на ехо...")
+                        time.sleep(POST_RESPONSE_DELAY)
+                    else:
+                        logger.warning("Пропускане на отговор - все още говорим")
             except Exception as e:
                 logger.error(f"Грешка при обработка: {e}")
-                speak("Извинете, възникна грешка.")
+                if not is_speaking:
+                    speak("Извинете, възникна грешка.")
+                    time.sleep(2.5)
             finally:
                 is_processing = False
     
