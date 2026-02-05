@@ -1,5 +1,4 @@
 SpeechRecognition==3.10.1
-pyttsx3==2.90
 pyaudio==0.2.14
 requests
 gtts

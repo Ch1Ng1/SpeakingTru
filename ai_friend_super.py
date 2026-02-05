@@ -112,26 +112,32 @@ def speak(text):
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
             temp_file = fp.name
         
-        tts = gTTS(text=text, lang='bg', slow=False)
-        tts.save(temp_file)
-        
-        pygame.mixer.music.load(temp_file)
-        pygame.mixer.music.play()
-        
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.1)
-        
-        # Допълнителна пауза след говорене
-        time.sleep(0.5)
-        
-        pygame.mixer.music.unload()
-        
-        # Изчакваме малко преди да изтрием файла
-        time.sleep(0.2)
         try:
-            os.unlink(temp_file)
-        except:
-            pass
+            tts = gTTS(text=text, lang='bg', slow=False)
+            tts.save(temp_file)
+            
+            pygame.mixer.music.load(temp_file)
+            pygame.mixer.music.play()
+            
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            
+            # Допълнителна пауза след говорене
+            time.sleep(0.5)
+            
+        finally:
+            # Спираме музиката и освобождаваме ресурсите
+            try:
+                pygame.mixer.music.stop()
+                pygame.mixer.music.unload()
+            except:
+                pass
+            
+            # Изтриваме временния файл
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass  # Файлът може вече да е изтрит
         
     except Exception as e:
         logger.error(f"Грешка при глас: {e}")
@@ -256,21 +262,47 @@ def search_wikipedia(query):
         return None
 
 def calculate(expression):
-    """Изчислява математически изрази"""
+    """Изчислява математически изрази по безопасен начин"""
+    import ast
+    import operator
+    
+    # Валидираме израза
+    if not expression or not re.match(r'^[\d\s\+\-\*/\(\)\.\^]*$', expression):
+        return None
+    
+    # Заменяме ^ с ** за степенуване
+    expression = expression.replace('^', '**')
+    
     try:
-        # Валидираме израза
-        if not expression or not re.match(r'^[\d\s\+\-\*/\(\)\.]*$', expression):
-            return None
+        # Безопасно изчисление с ограничени операции
+        allowed_names = {
+            k: v for k, v in operator.__dict__.items() if not k.startswith('_')
+        }
+        allowed_names.update({
+            'abs': abs,
+            'round': round,
+            'min': min,
+            'max': max,
+        })
         
-        # Безопасно изчисление
-        result = eval(expression, {"__builtins__": {}}, {})
+        # Парсваме и оценяваме израза
+        node = ast.parse(expression, mode='eval')
+        
+        # Проверяваме дали всички имена са позволени
+        for node_item in ast.walk(node):
+            if isinstance(node_item, ast.Name) and node_item.id not in allowed_names:
+                return None
+            elif isinstance(node_item, ast.Call) and node_item.func.id not in allowed_names:
+                return None
+        
+        result = eval(compile(node, '<string>', 'eval'), {"__builtins__": {}}, allowed_names)
         
         # Форматираме резултата
         if isinstance(result, float):
             if result.is_integer():
                 return str(int(result))
             else:
-                return f"{result:.2f}"
+                return f"{result:.6f}".rstrip('0').rstrip('.')
         return str(result)
     except Exception as e:
         logger.warning(f"Грешка при изчисление: {e}")
@@ -279,7 +311,7 @@ def calculate(expression):
             try:
                 client = wolframalpha.Client(WOLFRAM_APP_ID)
                 res = client.query(expression)
-                if res:
+                if res and res.results:
                     return next(res.results).text
             except Exception as e:
                 logger.warning(f"WolframAlpha грешка: {e}")
@@ -325,18 +357,27 @@ def tell_joke():
         "Защо роботът беше тъжен? Защото му липсваше хард драйв!",
         "Какво каза нулата на осмицата? Хубав колан имаш!",
         "Защо програмистите бъркат Коледа с Хелоуин? Защото 25 dec е равно на 31 oct!",
+        "Какво е общото между програмиста и котката? И двамата имат 9 живота в Git!",
+        "Защо Python е като змия? Защото има отровни библиотеки!",
+        "Какво каза бащата на сина си програмист? Синко, ти си моят наследник!",
+        "Защо програмистите носят очила? Защото debug-ват през цялото време!",
+        "Какво е най-трудното в програмирането? Измислянето на имена на променливите!",
     ]
     return random.choice(jokes)
 
 def get_fun_fact():
-    """Споделя интересен факт"""
+    """Споделя интересен факт на български"""
     facts = [
-        "Мравките никога не спят!",
-        "Банановото дърво всъщност е трева, не дърво.",
-        "Медузите съществуват преди динозаврите.",
-        "В Исландия няма комари.",
-        "Светлината от слънцето пътува до Земята около 8 минути.",
-        "Златните рибки могат да различават цветове.",
+        "Мравките никога не спят и нямат уши, но могат да усетят вибрации.",
+        "Банановото дърво всъщност е трева, не дърво, и може да достигне 9 метра височина.",
+        "Медузите съществуват на Земята преди динозаврите - над 500 милиона години.",
+        "В Исландия няма комари, защото е твърде студено за тях.",
+        "Светлината от Слънцето пътува до Земята за около 8 минути и 20 секунди.",
+        "Златните рибки могат да различават цветовете и имат памет до 3 месеца.",
+        "Човешкият мозък използва около 20% от енергията на тялото, въпреки че е само 2% от теглото.",
+        "Октоподите имат три сърца и синьо кръв.",
+        "Пчелите могат да разпознават човешки лица.",
+        "Водопадът Анхел във Венецуела е най-високият водопад в света - 979 метра.",
     ]
     return random.choice(facts)
 
@@ -402,7 +443,7 @@ def get_crypto_price(crypto):
         change = current_price - open_price
         change_percent = (change / open_price) * 100
         
-        result = f"{crypto.upper()}: {current_price:.2f} долара"
+        result = f"{crypto.upper()}: {current_price:.4f} долара"
         
         if change >= 0:
             result += f", нагоре с {change_percent:.2f}%"
@@ -413,6 +454,34 @@ def get_crypto_price(crypto):
     except Exception as e:
         logger.error(f"Грешка при криптовалутни данни: {e}")
         return f"Не мога да получа информация за {crypto}."
+
+def get_currency_rate(from_currency, to_currency="BGN"):
+    """Получава обменен курс между валути"""
+    try:
+        # Използваме fixer.io или друг безплатен API
+        # За демонстрация ще използваме примерни курсове
+        rates = {
+            "USD": 1.85,  # 1 USD = 1.85 BGN
+            "EUR": 1.96,  # 1 EUR = 1.96 BGN
+            "GBP": 2.25,  # 1 GBP = 2.25 BGN
+            "CHF": 2.05,  # 1 CHF = 2.05 BGN
+        }
+        
+        from_curr = from_currency.upper()
+        to_curr = to_currency.upper()
+        
+        if from_curr not in rates:
+            return f"Не поддържам валутата {from_curr}."
+        
+        if to_curr != "BGN":
+            return f"Засега поддържам само конвертиране към BGN."
+        
+        rate = rates[from_curr]
+        return f"1 {from_curr} = {rate} {to_curr}"
+        
+    except Exception as e:
+        logger.error(f"Грешка при валутен курс: {e}")
+        return "Не мога да получа валутния курс в момента."
 
 def process_command(text):
     """Обработва специални команди"""
@@ -526,6 +595,26 @@ def process_command(text):
             return get_crypto_price(found_crypto)
         else:
             return "Кажете ми коя криптовалута. Например: Bitcoin, Ethereum, Dogecoin."
+    
+    # Валутни курсове
+    if any(word in text for word in ['курс', 'валута', 'долар', 'евро', 'лира', 'франк']):
+        currency_keywords = {
+            'долар': 'USD', 'usd': 'USD', 'щатски долар': 'USD',
+            'евро': 'EUR', 'eur': 'EUR',
+            'лира': 'GBP', 'gbp': 'GBP', 'паунд': 'GBP',
+            'франк': 'CHF', 'chf': 'CHF', 'швейцарски франк': 'CHF',
+        }
+        
+        found_currency = None
+        for name, code in currency_keywords.items():
+            if name in text:
+                found_currency = code
+                break
+        
+        if found_currency:
+            return get_currency_rate(found_currency)
+        else:
+            return "Кажете ми коя валута. Например: долар, евро, лира."
     
     # Wikipedia търсене
     if any(word in text for word in ['какво е', 'кой е', 'коя е', 'какви']):
@@ -647,7 +736,7 @@ def get_ai_response(user_message):
     
     # Помощ
     if any(word in text for word in ['помощ', 'какво можеш', 'способности', 'умееш']):
-        return "Мога да: изчислявам математически izraзи, проверявам времето, проверявам борсови цени (акции, злато, сребро) и криптовалути, търся в Wikipedia и Google, разказвам вицове, споделям интересни факти и запомням неща за теб!"
+        return "Мога да: изчислявам математически изрази, проверявам времето, проверявам борсови цени (акции, злато, сребро) и криптовалути, конвертирам валути, търся в Wikipedia и Google, разказвам вицове, споделям интересни факти и запомням неща за теб!"
     
     # Име на потребителя
     if user_memory.get('name'):
@@ -679,6 +768,7 @@ def main():
     print("   ✓ Борсови данни (Каква е цената на Apple акция?)")
     print("   ✓ Благородни метали (Колко струва златото?)")
     print("   ✓ Криптовалути (Колко струва Bitcoin?)")
+    print("   ✓ Валутни курсове (Колко е курсът на долара?)")
     print("   ✓ Wikipedia (Какво е изкуствен интелект?)")
     print("   ✓ Вицове (Разкажи вицове!)")
     print("   ✓ Интересни факти (Кажи ми факт)")
