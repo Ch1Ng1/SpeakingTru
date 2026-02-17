@@ -1,0 +1,19 @@
+{
+  "api_keys": {
+    "weather": "вашият_openweathermap_api_ключ_тук",
+    "wolfram": "вашият_wolframalpha_app_id_тук"
+  },
+  "settings": {
+    "echo_prevention_delay": 3.5,
+    "duplicate_question_timeout": 10,
+    "post_response_delay": 4,
+    "microphone_energy_threshold": 500,
+    "max_text_length": 500,
+    "max_conversation_history": 100,
+    "language": "bg",
+    "speech_recognition_language": "bg-BG"
+  },
+  "files": {
+    "memory_file": "user_memory.json"
+  }
+}

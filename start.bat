@@ -17,6 +17,6 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 REM Стартиране на програмата
-".venv\Scripts\python.exe" ai_friend_super.py
+".venv\Scripts\python.exe" kiki.py
 
 pause

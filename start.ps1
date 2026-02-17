@@ -15,4 +15,4 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 }
 
 # Стартиране на програмата
-& ".venv\Scripts\python.exe" ai_friend_super.py
+& ".venv\Scripts\python.exe" kiki.py

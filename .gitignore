@@ -45,3 +45,7 @@ desktop.ini
 
 # Logs
 *.log
+
+# Config files with secrets
+config.json
+user_memory.json
